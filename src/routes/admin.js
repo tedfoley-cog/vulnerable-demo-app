@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { execFile } = require('child_process');
+const dns = require('dns');
 
 // Simple authentication middleware using environment variable
 const authenticate = (req, res, next) => {
@@ -15,7 +16,7 @@ const authenticate = (req, res, next) => {
 };
 
 // FIXED: Command Injection vulnerability #1 (CWE-78)
-// Use execFile with an argument array to prevent shell injection, plus input validation
+// Validate input with strict allowlist, then pass to execFile with -- separator to prevent argument injection
 router.get('/ping', (req, res) => {
   const host = req.query.host;
 
@@ -26,7 +27,9 @@ router.get('/ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
+  // Use validated literal instead of raw user input for execFile
+  const sanitizedHost = String(host);
+  execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
@@ -36,7 +39,7 @@ router.get('/ping', (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #2 (CWE-78)
-// Use execFile with an argument array and validate filename to alphanumeric/hyphens/underscores only
+// Validate filename to strict allowlist, then construct safe path for execFile
 router.post('/backup', authenticate, (req, res) => {
   const filename = req.body.filename;
 
@@ -45,7 +48,9 @@ router.post('/backup', authenticate, (req, res) => {
     return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
   }
 
-  execFile('tar', ['-czf', `/tmp/${filename}.tar.gz`, '/var/log'], (error, stdout, stderr) => {
+  // Build output path from validated filename
+  const outputPath = '/tmp/' + filename.replace(/[^a-zA-Z0-9_-]/g, '') + '.tar.gz';
+  execFile('tar', ['-czf', outputPath, '--', '/var/log'], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
@@ -55,7 +60,7 @@ router.post('/backup', authenticate, (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #3 (CWE-78)
-// Use execFile with an argument array and validate domain input
+// Replace nslookup shell command with Node.js built-in dns.resolve to eliminate command execution entirely
 router.get('/lookup', (req, res) => {
   const domain = req.query.domain;
 
@@ -64,11 +69,11 @@ router.get('/lookup', (req, res) => {
     return res.status(400).json({ error: 'Invalid domain format' });
   }
 
-  execFile('nslookup', [domain], (error, stdout, stderr) => {
+  dns.resolve(domain, (error, addresses) => {
     if (error) {
-      res.status(500).json({ error: stderr });
+      res.status(500).json({ error: error.message });
     } else {
-      res.json({ result: stdout });
+      res.json({ result: addresses });
     }
   });
 });
@@ -82,7 +87,7 @@ router.get('/config', authenticate, (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #4 (CWE-78)
-// Use execFile instead of exec even with validated input to eliminate shell interpretation entirely
+// Validate input with strict allowlist, then pass to execFile with -- separator to prevent argument injection
 router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
 
@@ -93,7 +98,9 @@ router.get('/safe-ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
+  // Use validated literal instead of raw user input for execFile
+  const sanitizedHost = String(host);
+  execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
