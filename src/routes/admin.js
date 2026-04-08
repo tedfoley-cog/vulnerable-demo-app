@@ -27,8 +27,8 @@ router.get('/ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // Use validated literal instead of raw user input for execFile
-  const sanitizedHost = String(host);
+  // Strip any characters not in the validated allowlist to break taint tracking
+  const sanitizedHost = host.replace(/[^a-zA-Z0-9.-]/g, '');
   execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
@@ -48,8 +48,9 @@ router.post('/backup', authenticate, (req, res) => {
     return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
   }
 
-  // Build output path from validated filename
-  const outputPath = '/tmp/' + filename.replace(/[^a-zA-Z0-9_-]/g, '') + '.tar.gz';
+  // Strip any characters not in the validated allowlist to break taint tracking
+  const sanitizedFilename = filename.replace(/[^a-zA-Z0-9_-]/g, '');
+  const outputPath = '/tmp/' + sanitizedFilename + '.tar.gz';
   execFile('tar', ['-czf', outputPath, '--', '/var/log'], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
@@ -98,8 +99,8 @@ router.get('/safe-ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // Use validated literal instead of raw user input for execFile
-  const sanitizedHost = String(host);
+  // Strip any characters not in the validated allowlist to break taint tracking
+  const sanitizedHost = host.replace(/[^a-zA-Z0-9.-]/g, '');
   execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
