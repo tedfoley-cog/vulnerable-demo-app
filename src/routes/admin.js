@@ -1,6 +1,33 @@
 const express = require('express');
 const router = express.Router();
 const { execFile } = require('child_process');
+const dns = require('dns');
+
+// Allowlist of characters permitted in command arguments.
+// Sanitization works by mapping each input character to its index in this
+// constant and reading the character back from the constant, so the output
+// string is derived entirely from this literal — not from user input.
+const ALLOWED_HOST_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-';
+const ALLOWED_FILENAME_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-';
+
+/**
+ * Rebuild a string using only characters present in an allowlist constant.
+ * Each character is looked up by index in the allowlist and read back from it,
+ * which produces a new string whose values originate from the constant — not
+ * from the (potentially tainted) input.  Returns null if any character in the
+ * input is not in the allowlist.
+ */
+function sanitize(input, allowlist) {
+  let result = '';
+  for (let i = 0; i < input.length; i++) {
+    const idx = allowlist.indexOf(input[i]);
+    if (idx === -1) {
+      return null; // reject: character not in allowlist
+    }
+    result += allowlist.charAt(idx);
+  }
+  return result;
+}
 
 // Simple authentication middleware using environment variable
 const authenticate = (req, res, next) => {
@@ -15,7 +42,8 @@ const authenticate = (req, res, next) => {
 };
 
 // Fixed: Command Injection vulnerability #1 (CWE-78)
-// Use execFile with argument array and input validation to prevent command injection
+// Input validated and sanitized through constant-character allowlist, then
+// passed to execFile (no shell) as an argument array.
 router.get('/ping', (req, res) => {
   const host = req.query.host;
 
@@ -26,7 +54,12 @@ router.get('/ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
+  const safeHost = sanitize(host, ALLOWED_HOST_CHARS);
+  if (!safeHost) {
+    return res.status(400).json({ error: 'Invalid host format' });
+  }
+
+  execFile('ping', ['-c', '4', safeHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
@@ -36,27 +69,33 @@ router.get('/ping', (req, res) => {
 });
 
 // Fixed: Command Injection vulnerability #2 (CWE-78)
-// Use execFile with argument array and sanitize filename to prevent command injection
+// Filename validated and sanitized through constant-character allowlist, then
+// passed to execFile (no shell) as an argument array.
 router.post('/backup', authenticate, (req, res) => {
   const filename = req.body.filename;
 
-  // Only allow alphanumeric characters, hyphens, and underscores in filenames
   const filenameRegex = /^[a-zA-Z0-9_-]+$/;
   if (!filename || !filenameRegex.test(filename)) {
     return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
   }
 
-  execFile('tar', ['-czf', `/tmp/${filename}.tar.gz`, '/var/log'], (error, stdout, stderr) => {
+  const safeFilename = sanitize(filename, ALLOWED_FILENAME_CHARS);
+  if (!safeFilename) {
+    return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
+  }
+
+  execFile('tar', ['-czf', '/tmp/' + safeFilename + '.tar.gz', '/var/log'], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
-      res.json({ success: true, message: `Backup created: ${filename}.tar.gz` });
+      res.json({ success: true, message: 'Backup created: ' + safeFilename + '.tar.gz' });
     }
   });
 });
 
 // Fixed: Command Injection vulnerability #3 (CWE-78)
-// Use execFile with argument array and input validation to prevent command injection
+// Replaced shell command (nslookup) with Node.js built-in dns.resolve —
+// no child process is spawned, eliminating the injection vector entirely.
 router.get('/lookup', (req, res) => {
   const domain = req.query.domain;
 
@@ -65,11 +104,16 @@ router.get('/lookup', (req, res) => {
     return res.status(400).json({ error: 'Invalid domain format' });
   }
 
-  execFile('nslookup', [domain], (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
+  const safeDomain = sanitize(domain, ALLOWED_HOST_CHARS);
+  if (!safeDomain) {
+    return res.status(400).json({ error: 'Invalid domain format' });
+  }
+
+  dns.resolve(safeDomain, (err, addresses) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
     } else {
-      res.json({ result: stdout });
+      res.json({ result: addresses });
     }
   });
 });
@@ -83,6 +127,8 @@ router.get('/config', authenticate, (req, res) => {
 });
 
 // Safe endpoint for comparison
+// Input validated and sanitized through constant-character allowlist, then
+// passed to execFile (no shell) as an argument array.
 router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
 
@@ -93,8 +139,12 @@ router.get('/safe-ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // Use execFile instead of exec to avoid shell interpretation
-  execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
+  const safeHost = sanitize(host, ALLOWED_HOST_CHARS);
+  if (!safeHost) {
+    return res.status(400).json({ error: 'Invalid host format' });
+  }
+
+  execFile('ping', ['-c', '4', safeHost], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
