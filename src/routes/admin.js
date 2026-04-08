@@ -5,6 +5,11 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+// HTML-escape to prevent reflected XSS when embedding user input in HTML responses
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Simple authentication middleware using environment variable
 const authenticate = (req, res, next) => {
   const authHeader = req.headers['x-admin-auth'];
@@ -36,14 +41,29 @@ router.get('/ping', (req, res) => {
       res.status(500).json({ error: 'Host lookup failed: ' + err.message });
     } else {
       const lines = addresses.map(a => 'Address: ' + a.address + ' (IPv' + a.family + ')').join('\n');
-      res.send('<pre>Host lookup: ' + host + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
+      res.send('<pre>Host lookup: ' + escapeHtml(host) + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
     }
   });
 });
 
+// Rate limiter for backup endpoint: max 10 requests per minute per IP
+const backupRateLimit = {};
+function checkBackupRateLimit(ip) {
+  const now = Date.now();
+  if (!backupRateLimit[ip]) backupRateLimit[ip] = [];
+  backupRateLimit[ip] = backupRateLimit[ip].filter(ts => now - ts < 60000);
+  if (backupRateLimit[ip].length >= 10) return false;
+  backupRateLimit[ip].push(now);
+  return true;
+}
+
 // FIXED: Command Injection vulnerability #2 (CWE-78)
 // Uses spawn with only static arguments; user input only controls the output file path via fs
 router.post('/backup', authenticate, (req, res) => {
+  if (!checkBackupRateLimit(req.ip)) {
+    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  }
+
   const filenameInput = req.body.filename;
 
   const safeFilenameRegex = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -52,7 +72,13 @@ router.post('/backup', authenticate, (req, res) => {
   }
 
   const filename = filenameInput.replace(/[^a-zA-Z0-9_-]/g, '');
-  const outputPath = path.join('/tmp', filename + '.tar.gz');
+  const outputPath = path.resolve('/tmp', filename + '.tar.gz');
+
+  // Verify resolved path stays within /tmp to prevent path traversal
+  if (!outputPath.startsWith('/tmp/')) {
+    return res.status(400).json({ error: 'Invalid output path' });
+  }
+
   const output = fs.createWriteStream(outputPath);
 
   // No user input in command arguments - archive is written to stdout then piped to file
@@ -123,7 +149,7 @@ router.get('/safe-ping', (req, res) => {
       res.status(500).json({ error: 'Host lookup failed: ' + err.message });
     } else {
       const lines = addresses.map(a => 'Address: ' + a.address + ' (IPv' + a.family + ')').join('\n');
-      res.send('<pre>Host lookup: ' + host + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
+      res.send('<pre>Host lookup: ' + escapeHtml(host) + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
     }
   });
 });
