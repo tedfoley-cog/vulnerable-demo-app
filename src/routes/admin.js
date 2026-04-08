@@ -63,8 +63,8 @@ const authenticate = (req, res, next) => {
 // conversion (parseInt→String) to break taint, then passed to execFile.
 router.get('/ping', (req, res) => {
   const host = req.query.host;
-  if (!host) {
-    return res.status(400).json({ error: 'Missing host parameter' });
+  if (!host || typeof host !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid host parameter' });
   }
 
   resolveToSafeIP(host, (err, safeIP) => {
@@ -90,7 +90,7 @@ router.post('/backup', authenticate, (req, res) => {
 
   // Validate the label so callers still get feedback on bad input
   const filenameRegex = /^[a-zA-Z0-9_-]+$/;
-  if (!label || !filenameRegex.test(label)) {
+  if (!label || typeof label !== 'string' || !filenameRegex.test(label)) {
     return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
   }
 
@@ -114,7 +114,7 @@ router.get('/lookup', (req, res) => {
   const domain = req.query.domain;
 
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,253}[a-zA-Z0-9]$/;
-  if (!domain || !domainRegex.test(domain)) {
+  if (!domain || typeof domain !== 'string' || !domainRegex.test(domain)) {
     return res.status(400).json({ error: 'Invalid domain format' });
   }
 
@@ -143,8 +143,8 @@ router.get('/config', authenticate, (req, res) => {
 router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
 
-  if (!host) {
-    return res.status(400).json({ error: 'Missing host parameter' });
+  if (!host || typeof host !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid host parameter' });
   }
 
   resolveToSafeIP(host, (err, safeIP) => {
