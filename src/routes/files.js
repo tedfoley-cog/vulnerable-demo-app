@@ -2,6 +2,16 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
+
+// Rate limiter for routes that perform file system access
+const fsRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 60, // limit each IP to 60 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 
@@ -53,7 +63,7 @@ router.post('/write', (req, res) => {
 });
 
 // Safe endpoint for comparison (not vulnerable)
-router.get('/safe-read', (req, res) => {
+router.get('/safe-read', fsRateLimiter, (req, res) => {
   const filename = req.query.filename;
   
   // SAFE: Validate filename doesn't contain path traversal
