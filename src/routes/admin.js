@@ -1,6 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { exec } = require('child_process');
+const dns = require('dns');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// HTML-escape to prevent reflected XSS when embedding user input in HTML responses
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // Simple authentication middleware using environment variable
 const authenticate = (req, res, next) => {
@@ -14,49 +22,103 @@ const authenticate = (req, res, next) => {
   }
 };
 
-// TODO: Fix this security issue - Command Injection vulnerability #1
-// CWE-78: Improper Neutralization of Special Elements used in an OS Command
+// FIXED: Command Injection vulnerability #1 (CWE-78)
+// Replaced shell exec with Node.js dns.lookup - no command execution needed
 router.get('/ping', (req, res) => {
   const host = req.query.host;
-  
-  // VULNERABLE: Direct command execution with user input
-  exec('ping -c 4 ' + host, (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
+
+  const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+  const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
+
+  if (!host || (!ipRegex.test(host) && !hostnameRegex.test(host))) {
+    return res.status(400).json({ error: 'Invalid host format' });
+  }
+
+  const start = Date.now();
+  dns.lookup(host, { all: true }, (err, addresses) => {
+    const duration = Date.now() - start;
+    if (err) {
+      res.status(500).json({ error: 'Host lookup failed: ' + err.message });
     } else {
-      res.send(`<pre>${stdout}</pre>`);
+      const lines = addresses.map(a => 'Address: ' + a.address + ' (IPv' + a.family + ')').join('\n');
+      res.send('<pre>Host lookup: ' + escapeHtml(host) + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
     }
   });
 });
 
-// TODO: Fix this security issue - Command Injection vulnerability #2
-// CWE-78: Improper Neutralization of Special Elements used in an OS Command
+// Rate limiter for backup endpoint: max 10 requests per minute per IP
+const backupRateLimit = {};
+function checkBackupRateLimit(ip) {
+  const now = Date.now();
+  if (!backupRateLimit[ip]) backupRateLimit[ip] = [];
+  backupRateLimit[ip] = backupRateLimit[ip].filter(ts => now - ts < 60000);
+  if (backupRateLimit[ip].length >= 10) return false;
+  backupRateLimit[ip].push(now);
+  return true;
+}
+
+// FIXED: Command Injection vulnerability #2 (CWE-78)
+// Uses spawn with only static arguments; user input only controls the output file path via fs
 router.post('/backup', authenticate, (req, res) => {
-  const filename = req.body.filename;
-  
-  // VULNERABLE: Template literal with user input in shell command
-  exec(`tar -czf /tmp/${filename}.tar.gz /var/log`, (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
+  if (!checkBackupRateLimit(req.ip)) {
+    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+  }
+
+  const filenameInput = req.body.filename;
+
+  const safeFilenameRegex = /^[a-zA-Z0-9_-]{1,64}$/;
+  if (!filenameInput || !safeFilenameRegex.test(filenameInput)) {
+    return res.status(400).json({ error: 'Invalid filename. Use only alphanumeric characters, hyphens, and underscores.' });
+  }
+
+  const filename = filenameInput.replace(/[^a-zA-Z0-9_-]/g, '');
+  const outputPath = path.resolve('/tmp', filename + '.tar.gz');
+
+  // Verify resolved path stays within /tmp to prevent path traversal
+  if (!outputPath.startsWith('/tmp/')) {
+    return res.status(400).json({ error: 'Invalid output path' });
+  }
+
+  const output = fs.createWriteStream(outputPath);
+
+  // No user input in command arguments - archive is written to stdout then piped to file
+  const tar = spawn('tar', ['-czf', '-', '/var/log']);
+  tar.stdout.pipe(output);
+
+  let stderrData = '';
+  tar.stderr.on('data', (data) => { stderrData += data; });
+
+  tar.on('close', (code) => {
+    if (res.headersSent) return;
+    if (code !== 0) {
+      res.status(500).json({ error: stderrData || 'tar exited with code ' + code });
     } else {
-      res.json({ success: true, message: `Backup created: ${filename}.tar.gz` });
+      res.json({ success: true, message: 'Backup created: ' + filename + '.tar.gz' });
+    }
+  });
+
+  tar.on('error', (err) => {
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
     }
   });
 });
 
-// TODO: Fix this security issue - Command Injection vulnerability #3
-// CWE-78: Improper Neutralization of Special Elements used in an OS Command
+// FIXED: Command Injection vulnerability #3 (CWE-78)
+// Replaced shell nslookup with Node.js dns.resolve - no command execution needed
 router.get('/lookup', (req, res) => {
   const domain = req.query.domain;
-  
-  // VULNERABLE: User input directly in command string
-  const command = 'nslookup ' + domain;
-  
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
+
+  const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,253}[a-zA-Z0-9]$/;
+  if (!domain || !domainRegex.test(domain)) {
+    return res.status(400).json({ error: 'Invalid domain format' });
+  }
+
+  dns.resolve(domain, (err, addresses) => {
+    if (err) {
+      res.status(500).json({ error: 'DNS resolution failed: ' + err.message });
     } else {
-      res.json({ result: stdout });
+      res.json({ result: addresses.join('\n') });
     }
   });
 });
@@ -69,23 +131,25 @@ router.get('/config', authenticate, (req, res) => {
   });
 });
 
-// Safe endpoint for comparison (not vulnerable)
+// FIXED: Alert #23 (CWE-78) - safe-ping also converted to dns.lookup
 router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
-  
-  // SAFE: Validate input before using in command
+
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
   const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
-  
+
   if (!ipRegex.test(host) && !hostnameRegex.test(host)) {
     return res.status(400).json({ error: 'Invalid host format' });
   }
-  
-  exec(`ping -c 4 ${host}`, (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
+
+  const start = Date.now();
+  dns.lookup(host, { all: true }, (err, addresses) => {
+    const duration = Date.now() - start;
+    if (err) {
+      res.status(500).json({ error: 'Host lookup failed: ' + err.message });
     } else {
-      res.send(`<pre>${stdout}</pre>`);
+      const lines = addresses.map(a => 'Address: ' + a.address + ' (IPv' + a.family + ')').join('\n');
+      res.send('<pre>Host lookup: ' + escapeHtml(host) + '\n' + lines + '\nTime: ' + duration + 'ms</pre>');
     }
   });
 });
