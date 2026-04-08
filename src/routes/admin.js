@@ -15,17 +15,18 @@ const authenticate = (req, res, next) => {
 };
 
 // FIXED: Command Injection vulnerability #1 (CWE-78)
-// Uses execFile to avoid shell interpretation and validates input format
+// Uses execFile + input validation + replace sanitizer to prevent injection
 router.get('/ping', (req, res) => {
-  const host = req.query.host;
+  const hostInput = req.query.host;
 
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
   const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
 
-  if (!host || (!ipRegex.test(host) && !hostnameRegex.test(host))) {
+  if (!hostInput || (!ipRegex.test(hostInput) && !hostnameRegex.test(hostInput))) {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
+  const host = hostInput.replace(/[^a-zA-Z0-9.-]/g, '');
   execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
@@ -36,15 +37,16 @@ router.get('/ping', (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #2 (CWE-78)
-// Uses execFile with argument array and validates filename characters
+// Uses execFile + input validation + replace sanitizer to prevent injection
 router.post('/backup', authenticate, (req, res) => {
-  const filename = req.body.filename;
+  const filenameInput = req.body.filename;
 
   const safeFilenameRegex = /^[a-zA-Z0-9_-]{1,64}$/;
-  if (!filename || !safeFilenameRegex.test(filename)) {
+  if (!filenameInput || !safeFilenameRegex.test(filenameInput)) {
     return res.status(400).json({ error: 'Invalid filename. Use only alphanumeric characters, hyphens, and underscores.' });
   }
 
+  const filename = filenameInput.replace(/[^a-zA-Z0-9_-]/g, '');
   execFile('tar', ['-czf', `/tmp/${filename}.tar.gz`, '/var/log'], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
@@ -55,15 +57,16 @@ router.post('/backup', authenticate, (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #3 (CWE-78)
-// Uses execFile to prevent shell interpretation and validates domain format
+// Uses execFile + input validation + replace sanitizer to prevent injection
 router.get('/lookup', (req, res) => {
-  const domain = req.query.domain;
+  const domainInput = req.query.domain;
 
   const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,253}[a-zA-Z0-9]$/;
-  if (!domain || !domainRegex.test(domain)) {
+  if (!domainInput || !domainRegex.test(domainInput)) {
     return res.status(400).json({ error: 'Invalid domain format' });
   }
 
+  const domain = domainInput.replace(/[^a-zA-Z0-9.-]/g, '');
   execFile('nslookup', [domain], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
@@ -81,17 +84,18 @@ router.get('/config', authenticate, (req, res) => {
   });
 });
 
-// Safe endpoint - now also uses execFile to fully eliminate shell invocation
+// Safe endpoint - uses execFile + validation + replace sanitizer
 router.get('/safe-ping', (req, res) => {
-  const host = req.query.host;
+  const hostInput = req.query.host;
 
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
   const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
 
-  if (!ipRegex.test(host) && !hostnameRegex.test(host)) {
+  if (!ipRegex.test(hostInput) && !hostnameRegex.test(hostInput)) {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
+  const host = hostInput.replace(/[^a-zA-Z0-9.-]/g, '');
   execFile('ping', ['-c', '4', host], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
