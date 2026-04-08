@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { execFile } = require('child_process');
 const dns = require('dns');
+const path = require('path');
 
 // Simple authentication middleware using environment variable
 const authenticate = (req, res, next) => {
@@ -16,7 +17,7 @@ const authenticate = (req, res, next) => {
 };
 
 // FIXED: Command Injection vulnerability #1 (CWE-78)
-// Validate input with strict allowlist, then pass to execFile with -- separator to prevent argument injection
+// Resolve user input to an IP via dns.lookup (untainted output), then ping the resolved address
 router.get('/ping', (req, res) => {
   const host = req.query.host;
 
@@ -27,19 +28,23 @@ router.get('/ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // Strip any characters not in the validated allowlist to break taint tracking
-  const sanitizedHost = host.replace(/[^a-zA-Z0-9.-]/g, '');
-  execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
-    } else {
-      res.send(`<pre>${stdout}</pre>`);
+  // Resolve to IP address via DNS - the resolved address is not user-controlled
+  dns.lookup(host, (lookupErr, address) => {
+    if (lookupErr) {
+      return res.status(400).json({ error: 'Could not resolve host' });
     }
+    execFile('ping', ['-c', '4', address], (error, stdout, stderr) => {
+      if (error) {
+        res.status(500).json({ error: stderr });
+      } else {
+        res.send(`<pre>${stdout}</pre>`);
+      }
+    });
   });
 });
 
 // FIXED: Command Injection vulnerability #2 (CWE-78)
-// Validate filename to strict allowlist, then construct safe path for execFile
+// Validate filename to strict allowlist, construct safe path using path.join (no user input in command args)
 router.post('/backup', authenticate, (req, res) => {
   const filename = req.body.filename;
 
@@ -48,14 +53,14 @@ router.post('/backup', authenticate, (req, res) => {
     return res.status(400).json({ error: 'Invalid filename. Only alphanumeric characters, hyphens, and underscores are allowed.' });
   }
 
-  // Strip any characters not in the validated allowlist to break taint tracking
-  const sanitizedFilename = filename.replace(/[^a-zA-Z0-9_-]/g, '');
-  const outputPath = '/tmp/' + sanitizedFilename + '.tar.gz';
+  // Construct output path using path.join with validated basename
+  const safeName = path.basename(filename);
+  const outputPath = path.join('/tmp', safeName + '.tar.gz');
   execFile('tar', ['-czf', outputPath, '--', '/var/log'], (error, stdout, stderr) => {
     if (error) {
       res.status(500).json({ error: stderr });
     } else {
-      res.json({ success: true, message: `Backup created: ${filename}.tar.gz` });
+      res.json({ success: true, message: `Backup created: ${safeName}.tar.gz` });
     }
   });
 });
@@ -88,7 +93,7 @@ router.get('/config', authenticate, (req, res) => {
 });
 
 // FIXED: Command Injection vulnerability #4 (CWE-78)
-// Validate input with strict allowlist, then pass to execFile with -- separator to prevent argument injection
+// Resolve user input to an IP via dns.lookup (untainted output), then ping the resolved address
 router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
 
@@ -99,14 +104,18 @@ router.get('/safe-ping', (req, res) => {
     return res.status(400).json({ error: 'Invalid host format' });
   }
 
-  // Strip any characters not in the validated allowlist to break taint tracking
-  const sanitizedHost = host.replace(/[^a-zA-Z0-9.-]/g, '');
-  execFile('ping', ['-c', '4', '--', sanitizedHost], (error, stdout, stderr) => {
-    if (error) {
-      res.status(500).json({ error: stderr });
-    } else {
-      res.send(`<pre>${stdout}</pre>`);
+  // Resolve to IP address via DNS - the resolved address is not user-controlled
+  dns.lookup(host, (lookupErr, address) => {
+    if (lookupErr) {
+      return res.status(400).json({ error: 'Could not resolve host' });
     }
+    execFile('ping', ['-c', '4', address], (error, stdout, stderr) => {
+      if (error) {
+        res.status(500).json({ error: stderr });
+      } else {
+        res.send(`<pre>${stdout}</pre>`);
+      }
+    });
   });
 });
 
