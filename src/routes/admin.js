@@ -20,7 +20,7 @@ router.get('/ping', (req, res) => {
   const host = req.query.host;
 
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-  const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
+  const hostnameRegex = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+$/;
 
   if (!host || (!ipRegex.test(host) && !hostnameRegex.test(host))) {
     return res.status(400).json({ error: 'Invalid host format' });
@@ -87,7 +87,7 @@ router.get('/safe-ping', (req, res) => {
   const host = req.query.host;
 
   const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-  const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$/;
+  const hostnameRegex = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+$/;
 
   if (!host || (!ipRegex.test(host) && !hostnameRegex.test(host))) {
     return res.status(400).json({ error: 'Invalid host format' });
